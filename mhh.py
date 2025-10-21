@@ -15,37 +15,72 @@ st.set_page_config(
 # Usamos @st.cache_data para que la descarga de datos de Yahoo Finance
 # solo se ejecute una vez por cada conjunto de tickers y fechas,
 # haciendo la aplicación mucho más rápida.
+# --- REEMPLAZA TU FUNCIÓN get_stock_data CON ESTA ---
+
 @st.cache_data
 def get_stock_data(tickers_string, start_date, end_date):
     """
     Descarga los precios de cierre ajustados para una lista de tickers.
     Devuelve un DataFrame de precios y una lista de tickers que no se pudieron encontrar.
+    (Versión Robusta y a Prueba de Errores)
     """
     tickers = [ticker.strip().upper() for ticker in tickers_string.split(',') if ticker.strip()]
     if not tickers:
         return pd.DataFrame(), []
 
     try:
+        # 1. Intenta descargar todos los tickers a la vez
         data = yf.download(tickers, start=start_date, end=end_date, progress=False)
+        
+        # 2. VERIFICACIÓN CRÍTICA: Si el DataFrame está vacío, falló toda la descarga.
         if data.empty:
+            st.error(f"Fallo total en la descarga. Yahoo Finance no devolvió datos para ninguno de los tickers en el rango de fechas. (Tickers intentados: {', '.join(tickers)})")
+            return pd.DataFrame(), tickers
+
+        # 3. Extraer la columna 'Adj Close' de forma segura.
+        # Si pides múltiples tickers, yfinance devuelve un MultiIndex.
+        if isinstance(data.columns, pd.MultiIndex):
+            prices = data['Adj Close']
+        # Si pides un solo ticker, devuelve un DataFrame simple.
+        else:
+            if 'Adj Close' in data.columns:
+                prices = data[['Adj Close']]
+                # Renombrar la columna para que tenga el nombre del ticker
+                prices.columns = [tickers[0]]
+            else:
+                # Caso muy raro donde ni siquiera viene 'Adj Close' para un solo ticker
+                st.error(f"El DataFrame para el ticker '{tickers[0]}' no contiene la columna 'Adj Close'. Columnas disponibles: {', '.join(data.columns)}")
+                return pd.DataFrame(), tickers
+
+        # Si después de extraer 'Adj Close' nos queda una Serie (caso de un solo ticker exitoso
+        # entre varios fallidos), la convertimos a DataFrame.
+        if isinstance(prices, pd.Series):
+            prices = prices.to_frame(name=prices.name)
+            
+        # 4. Identificar qué tickers específicos fallaron (columnas llenas de NaN)
+        # y cuáles tuvieron éxito.
+        failed_tickers = prices.columns[prices.isnull().all()].tolist()
+        successful_tickers = prices.columns.drop(failed_tickers).tolist()
+
+        if not successful_tickers:
+            # Si todos fallaron, aunque el DataFrame inicial no estuviera vacío
             return pd.DataFrame(), tickers
             
-        prices = data['Adj Close']
+        # 5. Devolver un DataFrame limpio solo con los tickers exitosos
+        final_prices = prices[successful_tickers]
         
-        # Si es un solo ticker, yfinance devuelve una Serie, la convertimos a DataFrame
-        if isinstance(prices, pd.Series):
-            prices = prices.to_frame(name=tickers[0])
-            
-        # Encontrar tickers que no devolvieron datos (todas sus filas son NaN)
-        failed_tickers = prices.columns[prices.isnull().all()].tolist()
+        # Rellenar huecos ocasionales con el último valor conocido
+        if final_prices.isnull().values.any():
+            final_prices = final_prices.ffill().bfill()
         
-        # Devolver solo los datos de los tickers exitosos
-        return prices.dropna(axis=1, how='all'), failed_tickers
+        return final_prices.dropna(), failed_tickers
 
     except Exception as e:
-        st.error(f"Ocurrió un error al descargar los datos: {e}")
+        # Captura cualquier otro error inesperado durante el proceso
+        st.error(f"Ocurrió un error inesperado al descargar o procesar los datos: {e}")
+        # Muestra el traceback completo en la consola para depuración
+        traceback.print_exc()
         return pd.DataFrame(), tickers
-
 # --- TÍTULO Y DESCRIPCIÓN ---
 st.title("⚖️ Optimizador de Portafolios Financieros")
 st.markdown("""
