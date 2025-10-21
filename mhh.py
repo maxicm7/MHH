@@ -3,6 +3,7 @@ import pandas as pd
 import yfinance as yf
 from pypfopt import EfficientFrontier, risk_models, expected_returns
 from datetime import datetime, timedelta
+import traceback 
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(
